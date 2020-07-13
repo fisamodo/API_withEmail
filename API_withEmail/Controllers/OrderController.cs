@@ -6,6 +6,7 @@ using System.Data.Entity.Infrastructure;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
+using System.Net.Mail;
 using System.Web.Http;
 using System.Web.Http.Description;
 using API_withEmail.Models;
@@ -17,82 +18,112 @@ namespace API_withEmail.Controllers
         private DBModel db = new DBModel();
 
         // GET: api/Order
-        public IQueryable<Order> GetOrder()
+        public System.Object GetOrders()
         {
-            return db.Order;
+            var result = (from a in db.Order
+                          join b in db.Customer on a.CustomerID equals b.CustomerID
+
+                          select new
+                          {
+                              a.OrderID,
+                              a.OrderNo,
+                              Customer = b.Name,
+                              a.PMethod,
+                              a.GTotal
+                          }).ToList();
+
+            return result;
         }
 
         // GET: api/Order/5
         [ResponseType(typeof(Order))]
         public IHttpActionResult GetOrder(long id)
         {
-            Order order = db.Order.Find(id);
-            if (order == null)
-            {
-                return NotFound();
-            }
+            var order = (from a in db.Order
+                         where a.OrderID == id
 
-            return Ok(order);
-        }
+                         select new
+                         {
+                             a.OrderID,
+                             a.OrderNo,
+                             a.CustomerID,
+                             a.PMethod,
+                             a.GTotal,
+                             DeletedOrderItemIDs = ""
+                         }).FirstOrDefault();
 
-        // PUT: api/Order/5
-        [ResponseType(typeof(void))]
-        public IHttpActionResult PutOrder(long id, Order order)
-        {
-            if (!ModelState.IsValid)
-            {
-                return BadRequest(ModelState);
-            }
+            var orderDetails = (from a in db.OrderItems
+                                join b in db.Item on a.ItemID equals b.ItemID
+                                where a.OrderID == id
 
-            if (id != order.OrderID)
-            {
-                return BadRequest();
-            }
+                                select new
+                                {
+                                    a.OrderID,
+                                    a.OrderItemID,
+                                    a.ItemID,
+                                    ItemName = b.Name,
+                                    b.Price,
+                                    a.Quantity,
+                                    Total = a.Quantity * b.Price
+                                }).ToList();
 
-            db.Entry(order).State = EntityState.Modified;
-
-            try
-            {
-                db.SaveChanges();
-            }
-            catch (DbUpdateConcurrencyException)
-            {
-                if (!OrderExists(id))
-                {
-                    return NotFound();
-                }
-                else
-                {
-                    throw;
-                }
-            }
-
-            return StatusCode(HttpStatusCode.NoContent);
+            return Ok(new { order, orderDetails });
         }
 
         // POST: api/Order
         [ResponseType(typeof(Order))]
         public IHttpActionResult PostOrder(Order order)
         {
-            if (!ModelState.IsValid)
+            try
             {
-                return BadRequest(ModelState);
+                //Order table
+                if (order.OrderID == 0)
+                {
+                    db.Order.Add(order);
+                }
+                else
+                {
+
+                    db.Entry(order).State = EntityState.Modified;
+                }
+                //OrderItems table
+                foreach (var item in order.OrderItems)
+                {
+                    if (item.OrderItemID == 0)
+                        db.OrderItems.Add(item);
+                    else
+                        db.Entry(item).State = EntityState.Modified;
+                }
+
+                //Delete for OrderItems
+                foreach (var id in order.DeletedOrderItemIDs.Split(',').Where(x => x != ""))
+                {
+                    OrderItems x = db.OrderItems.Find(Convert.ToInt64(id));
+                    db.OrderItems.Remove(x);
+                }
+
+
+                db.SaveChanges();
+
+                return Ok();
             }
+            catch (Exception ex)
+            {
 
-            db.Order.Add(order);
-            db.SaveChanges();
-
-            return CreatedAtRoute("DefaultApi", new { id = order.OrderID }, order);
+                throw ex;
+            }
         }
 
         // DELETE: api/Order/5
         [ResponseType(typeof(Order))]
         public IHttpActionResult DeleteOrder(long id)
         {
-            Order order = db.Order.Find(id);
-            if (order == null)
+            Order order = db.Order.Include(y => y.OrderItems)
+                .SingleOrDefault(x => x.OrderID == id);
+
+            foreach (var item in order.OrderItems.ToList())
             {
-                return NotFound();
+                db.OrderItems.Remove(item);
             }
 
             db.Order.Remove(order);
